@@ -69,7 +69,7 @@ class BenchmarkRunner:
         benchmark.tearDown(**benchmark.params)
 
         # strip out version from param filename (`v$N/params.npz`)
-        version = benchmark.params["params"].split("/", 1)[0]
+        version = benchmark.params["params"].split("/", 2)[1]
 
         return {
             "name": benchmark.name,
