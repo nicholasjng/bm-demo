@@ -17,14 +17,16 @@ def setUp(**kwargs):
     fs = LakeFSFileSystem()
 
     # load test dataset
-    data = kwargs["data"]
-    fs.get(data, "test_data.npz")
-    datadict = np.load(data)
+    rpath = kwargs["data"]
+    lpath = "test_data.npz"
+    fs.get(rpath, lpath)
+    datadict = np.load(lpath)
 
     # load model parameters
-    paramfile = kwargs["params"]
-    fs.get(paramfile, "model.npz")
-    params = {k: v.item() for k, v in np.load(paramfile, allow_pickle=True).items()}
+    param_rpath = kwargs["params"]
+    param_lpath = "model.npz"
+    fs.get(param_rpath, param_lpath)
+    params = {k: v.item() for k, v in np.load(param_lpath, allow_pickle=True).items()}
 
     return {
         "data": datadict,
@@ -33,8 +35,9 @@ def setUp(**kwargs):
 
 
 def tearDown(**kwargs):
-    Path(kwargs["data"]).unlink(missing_ok=True)
-    Path(kwargs["params"]).unlink(missing_ok=True)
+    npzfiles = [f for f in Path.cwd().iterdir() if f.suffix == ".npz"]
+    for file in npzfiles:
+        file.unlink(missing_ok=True)
 
 
 @parametrize(
