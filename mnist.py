@@ -226,6 +226,7 @@ def save(model: TrainState, data: ArrayMapping) -> None:
         fs.put("model.npz", f"mnist/{version}/model.npz")
         tx.commit("mnist", version, message=f"Add MNIST data and model @{version}")
 
+
 def mnist_jax():
     """Load MNIST data and train a simple ConvNet model."""
     global model_version

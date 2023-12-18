@@ -68,8 +68,11 @@ class BenchmarkRunner:
         accuracy = benchmark.fn(**pkwargs)
         benchmark.tearDown(**benchmark.params)
 
+        # strip out version from param filename (`v$N/params.npz`)
+        version = benchmark.params["params"].split("/", 1)[0]
+
         return {
             "name": benchmark.name,
             "accuracy": accuracy,
-            "version": benchmark.params["version"]
+            "version": version,
         }
