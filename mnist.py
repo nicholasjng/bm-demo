@@ -7,23 +7,23 @@ in a versioned manner in JAX/Flax on the MNIST dataset.
 Source: https://github.com/google/flax/blob/main/examples/mnist
 """
 
+import logging
+import random
+from pathlib import Path
+
 import flax.linen as nn
+import fsspec
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-import logging
+import lakefs
 import numpy as np
 import optax
-import random
-import tensorflow_datasets as tfds
-
 from flax.training.train_state import TrainState
 
-from lakefs_spec import LakeFSFileSystem
-from lakefs_spec import client_helpers
+HERE = Path(__file__).parent
 
-fs = LakeFSFileSystem()
-client_helpers.create_repository(fs.client, "mnist", "local://mnist")
+repo = lakefs.Repository("mnist").create(storage_namespace="local://mnist", exist_ok=True)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -36,8 +36,6 @@ BATCH_SIZE = 128
 EPOCHS = 1
 LEARNING_RATE = 0.1
 MOMENTUM = 0.9
-
-model_version = 1
 
 
 class ConvNet(nn.Module):
@@ -87,22 +85,37 @@ def create_train_state(rng):
 
 def load_mnist() -> ArrayMapping:
     """
-    Load MNIST dataset from TFDS.
+    Load MNIST dataset using fsspec.
 
-    Returns:
-        data: Versioned dataset as numpy arrays, split into training and test data.
+    Returns
+    -------
+    ArrayMapping
+        Versioned dataset as numpy arrays, split into training and test data.
     """
-    ds_builder = tfds.builder("mnist")
-    ds_builder.download_and_prepare()
-    train_ds = tfds.as_numpy(ds_builder.as_dataset(split="train", batch_size=-1))
-    test_ds = tfds.as_numpy(ds_builder.as_dataset(split="test", batch_size=-1))
 
-    return {
-        "x_train": np.uint8(train_ds["image"]),
-        "y_train": np.uint8(train_ds["label"]),
-        "x_test": np.uint8(test_ds["image"]),
-        "y_test": np.uint8(test_ds["label"]),
-    }
+    if Path(HERE / "mnist.npz").exists():
+        return np.load(HERE / "mnist.npz")
+
+    mnist: ArrayMapping = {}
+
+    baseurl = "http://yann.lecun.com/exdb/mnist/"
+
+    for key, file in [
+        ("x_train", "train-images-idx3-ubyte.gz"),
+        ("x_test", "t10k-images-idx3-ubyte.gz"),
+        ("y_train", "train-labels-idx1-ubyte.gz"),
+        ("y_test", "t10k-labels-idx1-ubyte.gz"),
+    ]:
+        with fsspec.open(baseurl + file, compression="gzip") as f:
+            if key.startswith("x"):
+                mnist[key] = np.frombuffer(f.read(), np.uint8, offset=16).reshape((-1, 28, 28))
+            else:
+                mnist[key] = np.frombuffer(f.read(), np.uint8, offset=8)
+
+    # save locally
+    np.savez_compressed(HERE / "mnist.npz", **mnist)
+
+    return mnist
 
 
 def train_epoch(state, train_ds, train_labels, batch_size, rng):
@@ -199,7 +212,6 @@ def train(data: ArrayMapping) -> tuple[TrainState, ArrayMapping]:
 
 def save(model: TrainState, data: ArrayMapping) -> None:
     """Score the model on the test data."""
-    global model_version
 
     train_data = {
         "x_train": np.uint8(data["x_train"] * 255.),
@@ -215,27 +227,24 @@ def save(model: TrainState, data: ArrayMapping) -> None:
     np.savez_compressed("test_data.npz", **test_data)
     np.savez_compressed("model.npz", **model.params)
 
-    version = f"v{model_version}"
-    logger.info(f"Saving train/test data split and model @{version}.")
+    logger.info("Saving train/test data split and model.")
 
+    fs = fsspec.filesystem("lakefs")
     with fs.transaction as tx:
         # Upload the data...
-        fs.put("train_data.npz", f"mnist/{version}/train_data.npz")
-        fs.put("test_data.npz", f"mnist/{version}/test_data.npz")
+        fs.put("train_data.npz", "mnist/experiment/train_data.npz")
+        fs.put("test_data.npz", "mnist/experiment/test_data.npz")
         # ...and the model.
-        fs.put("model.npz", f"mnist/{version}/model.npz")
-        tx.commit("mnist", version, message=f"Add MNIST data and model @{version}")
+        fs.put("model.npz", "mnist/experiment/model.npz")
+        tx.commit("mnist", "experiment", message="Add MNIST data and model")
 
 
 def mnist_jax():
     """Load MNIST data and train a simple ConvNet model."""
-    global model_version
-    mnist_data = load_mnist()
-    mnist_data = preprocess(mnist_data)
-    for i in range(5):
-        model, data = train(mnist_data)
-        save(model, data)
-        model_version += 1
+    mnist = load_mnist()
+    mnist = preprocess(mnist)
+    model, data = train(mnist)
+    save(model, data)
 
 
 if __name__ == "__main__":
